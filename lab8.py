@@ -1,6 +1,7 @@
 import argparse
 import itertools
 import re
+import os
 import json
 import pickle
 
@@ -14,6 +15,8 @@ from tqdm import tqdm
 
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
+from sklearn import metrics
+from sklearn import preprocessing
 
 ### Globals strings ###
 ONTONOTES_LABELS = [
@@ -34,6 +37,8 @@ example_text = "On March 8, 2021, a group of hackers including Kottmann and call
        "customers and the company's private financial information, and gained superuser " \
        "access to the corporate networks of Cloudflare and Okta through their Verkada cameras."
 
+# Choices of combination function for part 3: average, sum, first, last, maxpool
+COMBINATION_FUNCTION = "average"
 
 def setup_argparse():
     p = argparse.ArgumentParser()
@@ -44,6 +49,9 @@ def setup_argparse():
     p.add_argument('--embed_func', choices=['first', 'last', 'sum', 'max', 'avg'],
                    help='the type of function to use to combine multiple embeddings into one entity'
                         'representation')
+    p.add_argument('--corpus', help='name of corpus file to load in')
+    p.add_argument('--classifier_path', help='name for path to save classifier')
+    p.add_argument('--test', action='store_true', help='whether to print metrics on test set')
     return p.parse_args()
 
 #####
@@ -80,7 +88,7 @@ def part_2(args, nlp):
 class ContextualVectors(Pipe):
     def __init__(self, nlp):
         self._nlp = nlp
-        self.combination_function = "average" ### modify this here for different versions of part 3
+        self.combination_function = COMBINATION_FUNCTION ### modify this here for different versions of part 3
 
     def __call__(self, doc):
         if type(doc) == str:
@@ -161,44 +169,78 @@ def part_3(args, nlp):
                     except:
                         print(f"Error on entity '{ent}' in document: {this_doc}")
                         continue
+                    # validation check for nans
+                    if np.isnan(ent.vector).any() or np.isinf(ent.vector.any()):
+                        print(f"Skipping entry, found nan or inf in vector for entity '{ent}' "
+                              f"in document: {this_doc}")
+                        continue
                     embeddings.append(ent.vector)
                     labels.append(ent.label_)
-        corpus[key] = [embeddings, labels]
+        # save processed split of corpus, with matrix of number_samples x features, list of labels
+        corpus[key] = [np.vstack(embeddings), labels]
 
-    # TODO this is just validation
+    # print number of entities found in each section for information
     for key in corpus.keys():
         print("{}: {} entities".format(key, len(corpus[key][0])))
 
-    with open("corpus.pkl", "wb") as fout:
+    with open(f"models/corpus_{COMBINATION_FUNCTION}.pkl", "wb") as fout:
         pickle.dump(corpus, fout)
 
 ### Errors
 # Token indices sequence length is longer than the specified maximum sequence length for this model (720 > 512). Running this sequence through the model will result in indexing errors
 
 
-
-
 def part_4(args, nlp):
-    # TODO this involves reading in ontonotes data, getting embeddings for the entities, then training a classifier with the paired embeddings and labels.
-    # TODO they should then try with different combination functions and see what they think
-    # take extracted representations and labels, and train a classifier
-    classifier = LogisticRegression() # TODO make better default params
+    # this involves reading in ontonotes data, getting embeddings for the entities,
+    # then training a classifier with the paired embeddings and labels.
+    classifier = LogisticRegression()  # TODO make better default params
 
-    # TODO READ IN TRAINING DATA
-    # make training data
-    text_data, text_labels = format_data(train_items)
-    # make pipeline
+    # This loads a dict of TESTING, TRAINING, VALIDATION keys and values as a nested list of
+    # 0 as embeddings and 1 as labels (co-indexed, equal length)
+    with open(args.corpus, "rb") as fin:
+        corpus = pickle.load(fin)
 
-    logging.info("Training classifier with params:")
-    logging.info(classifier.get_params())
-    classifier.fit(text_data, text_labels)
-    logging.info("Saving classifier to {}".format(self.path))
-    save_pkl(self, self.path)
+    # process data
+    label_encoder = preprocessing.LabelEncoder()  # labels need to be ints not strings
+    all_labels = list(itertools.chain(*[corpus[split][1] for split in corpus.keys()]))
+    label_encoder.fit(all_labels)
+
+    train_data, train_labels_ = corpus["TRAINING"]
+    train_labels = label_encoder.transform(train_labels_)  # inverse_transform restores to strings
+
+    #TODO check
+    print(np.isnan(train_data).any(), np.isinf(train_data).any())
+
+    print("Training classifier with params:")
+    print(classifier.get_params())
+
+    classifier.fit(train_data, train_labels)
+
+    print("Saving classifier to {}".format(args.classifier_path))
+    with open(args.classifier_path, "wb") as fout:
+        pickle.dump(classifier, fout)
+
     # visualise features
-    self.plot_coefficients()
-    # print out test accuracy if exists
-    if test_items:
-        self.classify_documents(test_items, has_labels=True)
+    # self.plot_coefficients()
+    # print out test accuracy if set to test
+    if args.test:
+        test_data, test_labels_ = corpus["TESTING"]
+        predictions = classifier.predict(test_data)
+
+        # TODO check if this works with NER confusion matrix and if it does make a function and use twice
+        predictions_ = label_encoder.inverse_transform(predictions)  # transform to strings for printing
+        accuracy = np.mean(predictions_ == test_labels_)
+        # matrix_labels = (ONTONOTES_LABELS
+        #     [label.name for label in Label] + [] if not conf_thresh else [label.name for label in
+        #                                                                   Label] + ["below thresh"]
+        # )
+        print("Classifier Accuracy: {}".format(accuracy))
+        print("-" * 89)
+        print("Classification Report:")
+        print(metrics.classification_report(test_labels_, predictions_,
+                                            target_names=label_encoder.classes_))
+        print("Confusion Matrix:")
+        print(metrics.confusion_matrix(test_labels_, predictions_, labels=[label_encoder.classes_]))
 
 
 def main(args, nlp):
@@ -215,11 +257,17 @@ def main(args, nlp):
 if __name__ == "__main__":
     args = setup_argparse()
 
-    # validation checks that model is downloaded
+    # validation checks
+    # that model is downloaded
     spacy_model_name = 'en_core_web_trf'
     if not spacy.util.is_package(spacy_model_name):
         spacy.cli.download(spacy_model_name)
+    # that relevant directories exist
+    for d in ["models", "data"]:
+        if not os.path.exists(d):
+            os.makedirs(d)
 
+    # load spacy model
     nlp = spacy.load('en_core_web_trf')
 
     main(args, nlp)
