@@ -206,10 +206,15 @@ def part_4(args, nlp):
     label_encoder.fit(all_labels)
 
     train_data, train_labels_ = corpus["TRAINING"]
-    train_labels = label_encoder.transform(train_labels_)  # inverse_transform restores to strings
-
-    #TODO check
+    #TODO check this is temporary validation
     print(np.isnan(train_data).any(), np.isinf(train_data).any())
+    nan_loc = np.argwhere(np.isnan(train_data))
+    remove_rows = sorted(list(set([row[0] for row in nan_loc])), reverse=True) # so remove last first
+    for row in remove_rows:
+        del train_labels_[row]
+        train_data = np.delete(train_data, row, 0)  # index to delete, and axis
+
+    train_labels = label_encoder.transform(train_labels_)  # inverse_transform restores to strings
 
     print("Training classifier with params:")
     print(classifier.get_params())
