@@ -166,8 +166,11 @@ def part_3(args, nlp):
     for key in corpus.keys():
         print("{}: {} entities".format(key, len(corpus[key][0])))
 
-    with open(f"models/corpus_average.pkl", "wb") as fout:
+    save_file = "data/corpus_average.pkl"
+    with open(save_file, "wb") as fout:
         pickle.dump(corpus, fout)
+
+    print(f"Saved full processed corpus to {save_file}")
 
 ### Errors
 # Token indices sequence length is longer than the specified maximum sequence length for this model (720 > 512). Running this sequence through the model will result in indexing errors
