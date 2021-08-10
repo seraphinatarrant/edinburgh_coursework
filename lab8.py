@@ -4,6 +4,7 @@ import re
 import os
 import json
 import pickle
+from typing import List
 
 import numpy as np
 import spacy
@@ -13,8 +14,8 @@ from spacy.pipeline import Pipe
 from pathlib import Path
 from tqdm import tqdm
 
-from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
+from sklearn.dummy import DummyClassifier
 from sklearn import metrics
 from sklearn import preprocessing
 
@@ -24,7 +25,6 @@ ONTONOTES_LABELS = [
     'ORG', 'PERCENT', 'PERSON', 'PRODUCT', 'QUANTITY', 'TIME', 'WORK_OF_ART']
 
 ontonotes_json = "data/ontonotes5_reduced.json"
-
 
 # TODO have a longer span of text for the second part of this question
 example_text = "On March 8, 2021, a group of hackers including Kottmann and calling themselves " \
@@ -37,8 +37,6 @@ example_text = "On March 8, 2021, a group of hackers including Kottmann and call
        "customers and the company's private financial information, and gained superuser " \
        "access to the corporate networks of Cloudflare and Okta through their Verkada cameras."
 
-# Choices of combination function for part 3: average, sum, first, last, maxpool
-COMBINATION_FUNCTION = "average"
 
 def setup_argparse():
     p = argparse.ArgumentParser()
@@ -46,12 +44,9 @@ def setup_argparse():
     p.add_argument('--ents', choices=ONTONOTES_LABELS, nargs='+')
     p.add_argument('--viz_output', default='entity_viz_example.html',
                    help='Name of output file for the visualisation')
-    p.add_argument('--embed_func', choices=['first', 'last', 'sum', 'max', 'avg'],
-                   help='the type of function to use to combine multiple embeddings into one entity'
-                        'representation')
     p.add_argument('--corpus', help='name of corpus file to load in')
     p.add_argument('--classifier_path', help='name for path to save classifier')
-    p.add_argument('--test', action='store_true', help='whether to print metrics on test set')
+    p.add_argument('--baseline', action='store_true', help='use a simple baseline classifier')
     return p.parse_args()
 
 #####
@@ -88,7 +83,7 @@ def part_2(args, nlp):
 class ContextualVectors(Pipe):
     def __init__(self, nlp):
         self._nlp = nlp
-        self.combination_function = COMBINATION_FUNCTION ### modify this here for different versions of part 3
+        self.combination_function = "average"
 
     def __call__(self, doc):
         if type(doc) == str:
@@ -112,16 +107,8 @@ class ContextualVectors(Pipe):
         return self.combine_vectors(trf_vector)
 
     def combine_vectors(self, trf_vector):
-        if self.combination_function == "first":
-            return trf_vector[0]
-        if self.combination_function == "last":
-            return trf_vector[-1]
-        if self.combination_function == "maxpool":
-            return np.maximum(trf_vector, axis=0)
-        if self.combination_function == "average":
-            return np.average(trf_vector, axis=0)
-        if self.combination_function == "sum":
-            return np.sum(trf_vector, axis=0)
+        return np.average(trf_vector, axis=0)
+
 
 
 @Language.factory("trf_vector_hook", assigns=["doc.user_token_hooks"])
@@ -183,17 +170,37 @@ def part_3(args, nlp):
     for key in corpus.keys():
         print("{}: {} entities".format(key, len(corpus[key][0])))
 
-    with open(f"models/corpus_{COMBINATION_FUNCTION}.pkl", "wb") as fout:
+    with open(f"models/corpus_average.pkl", "wb") as fout:
         pickle.dump(corpus, fout)
 
 ### Errors
 # Token indices sequence length is longer than the specified maximum sequence length for this model (720 > 512). Running this sequence through the model will result in indexing errors
 
 
+def print_classifier_stats(predictions: List[str], labels: List[str], classes: List[str]):
+    # TODO check if this works with NER confusion matrix and if it does make a higher and use twice
+    accuracy = np.mean(predictions == labels)
+    # matrix_labels = (ONTONOTES_LABELS
+    #     [label.name for label in Label] + [] if not conf_thresh else [label.name for label in
+    #                                                                   Label] + ["below thresh"]
+    # )
+    print("Classifier Accuracy: {}".format(accuracy))
+    print("-" * 89)
+    print("Classification Report:")
+    print(metrics.classification_report(labels, predictions, target_names=classes, zero_division=0))
+    # TODO currently get a broadcast error, fix ValueError: shape mismatch: objects cannot be broadcast to a single shape
+    # print("Confusion Matrix:")
+    # print(metrics.confusion_matrix(test_labels_, predictions_, labels=[label_encoder.classes_]))
+
+
 def part_4(args, nlp):
     # this involves reading in ontonotes data, getting embeddings for the entities,
     # then training a classifier with the paired embeddings and labels.
-    classifier = LogisticRegression()  # TODO make better default params
+    classifier = LogisticRegression(
+        multi_class="multinomial",
+        #class_weight="balanced",
+        max_iter=500
+    )
 
     # This loads a dict of TESTING, TRAINING, VALIDATION keys and values as a nested list of
     # 0 as embeddings and 1 as labels (co-indexed, equal length)
@@ -205,47 +212,45 @@ def part_4(args, nlp):
     all_labels = list(itertools.chain(*[corpus[split][1] for split in corpus.keys()]))
     label_encoder.fit(all_labels)
 
-    train_data, train_labels_ = corpus["TRAINING"]
-    #TODO check this is temporary validation
+    train_data, train_labels_ = corpus["TRAINING"]  # the _ is the spacy convention for the string representation (rather than int/float)
+    test_data, test_labels_ = corpus["TESTING"]
+    # TODO check this is temporary validation
     print(np.isnan(train_data).any(), np.isinf(train_data).any())
     nan_loc = np.argwhere(np.isnan(train_data))
-    remove_rows = sorted(list(set([row[0] for row in nan_loc])), reverse=True) # so remove last first
+    remove_rows = sorted(list(set([row[0] for row in nan_loc])),
+                         reverse=True)  # so remove last first
     for row in remove_rows:
         del train_labels_[row]
         train_data = np.delete(train_data, row, 0)  # index to delete, and axis
 
-    train_labels = label_encoder.transform(train_labels_)  # inverse_transform restores to strings
+    train_labels = label_encoder.transform(train_labels_)  # transform strings to ints
 
-    print("Training classifier with params:")
-    print(classifier.get_params())
+    if args.baseline:
+        for strat in ["most_frequent", "uniform", "stratified"]:
+            dummy_classifier = DummyClassifier(strategy=strat)
+            dummy_classifier.fit(train_data, train_labels)
+            dummy_predictions = dummy_classifier.predict(test_data)
+            dummy_predictions_ = label_encoder.inverse_transform(dummy_predictions)
 
-    classifier.fit(train_data, train_labels)
+            print(f"Stats for Baseline Classifier: {strat} on Test Set")
+            print_classifier_stats(dummy_predictions_, test_labels_, label_encoder.classes_)
 
-    print("Saving classifier to {}".format(args.classifier_path))
-    with open(args.classifier_path, "wb") as fout:
-        pickle.dump(classifier, fout)
+    else:
+        print("Training classifier with params:")
+        print(classifier.get_params())
 
-    # visualise features
-    # self.plot_coefficients()
-    # print out test accuracy if set to test
-    if args.test:
-        test_data, test_labels_ = corpus["TESTING"]
+        classifier.fit(train_data, train_labels)
+
+        print("Saving classifier to {}".format(args.classifier_path))
+        with open(args.classifier_path, "wb") as fout:
+            pickle.dump(classifier, fout)
+
         predictions = classifier.predict(test_data)
+        predictions_ = label_encoder.inverse_transform(predictions)  # inverse transform to strings for printing
 
-        # TODO check if this works with NER confusion matrix and if it does make a function and use twice
-        predictions_ = label_encoder.inverse_transform(predictions)  # transform to strings for printing
-        accuracy = np.mean(predictions_ == test_labels_)
-        # matrix_labels = (ONTONOTES_LABELS
-        #     [label.name for label in Label] + [] if not conf_thresh else [label.name for label in
-        #                                                                   Label] + ["below thresh"]
-        # )
-        print("Classifier Accuracy: {}".format(accuracy))
-        print("-" * 89)
-        print("Classification Report:")
-        print(metrics.classification_report(test_labels_, predictions_,
-                                            target_names=label_encoder.classes_))
-        print("Confusion Matrix:")
-        print(metrics.confusion_matrix(test_labels_, predictions_, labels=[label_encoder.classes_]))
+        print("Stats for Logistic Regression Classifier on Test Set")
+        print_classifier_stats(predictions_, test_labels_, label_encoder.classes_)
+
 
 
 def main(args, nlp):
