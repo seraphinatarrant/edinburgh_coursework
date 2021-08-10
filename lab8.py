@@ -24,7 +24,7 @@ ONTONOTES_LABELS = [
     'CARDINAL', 'DATE', 'EVENT', 'FAC', 'GPE', 'LANGUAGE', 'LAW', 'LOC', 'MONEY', 'NORP', 'ORDINAL',
     'ORG', 'PERCENT', 'PERSON', 'PRODUCT', 'QUANTITY', 'TIME', 'WORK_OF_ART']
 
-ontonotes_json = "data/ontonotes5_reduced.json"
+ontonotes_json = "data/ontonotes5_10percent.json"
 
 # TODO have a longer span of text for the second part of this question
 example_text = "On March 8, 2021, a group of hackers including Kottmann and calling themselves " \
@@ -119,7 +119,7 @@ def create_contextual_hook(nlp, name):
 def part_3(args, nlp):
 
     nlp.add_pipe("trf_vector_hook", last=True)
-    max_tok = 145  # max tokens per chunk
+    max_tok = 145  # max tokens per chunk based on the spacy striding behaviour. I can change this if I want
     def chunks(tokens, n):
         for i in range(0, len(tokens), n):
             yield tokens[i:i+n]
@@ -137,21 +137,17 @@ def part_3(args, nlp):
             if not entry.get("entities"):
                 continue
             this_string = entry["text"]
-            # BERT max is 512 wordpiece tokens at once
+            # BERT max is 512 wordpiece tokens at once, and there is one sample that exceeeds it
             if len(this_string.split()) > max_tok:
                 text_chunks = chunks(this_string, max_tok)
             else:
                 text_chunks = [this_string]
             for c in text_chunks:
                 this_doc = nlp("".join(c))
-
-                # TODO if want gold labels, now have to get the entity that is the offset in order to make it gold label? ONTONOTES json is 'entities': {'DATE': [[177, 186]]}
-                # TODO use start_char and end_char on both?
-                # TODO also deal with token length maximum of 512 (and or 145) - one thing exceeds it. Also check strides
                 # for silver labels:
                 for ent in this_doc.ents:
                     try:
-                        if not ent.vector.any(): # TODO this happens 4 times in ontonotes, but technically should not with subwords so it's weird
+                        if not ent.vector.any(): # this happens 4 times in ontonotes, but technically should not with subwords so it's weird
                             continue
                     except:
                         print(f"Error on entity '{ent}' in document: {this_doc}")
@@ -214,14 +210,6 @@ def part_4(args, nlp):
 
     train_data, train_labels_ = corpus["TRAINING"]  # the _ is the spacy convention for the string representation (rather than int/float)
     test_data, test_labels_ = corpus["TESTING"]
-    # TODO check this is temporary validation
-    print(np.isnan(train_data).any(), np.isinf(train_data).any())
-    nan_loc = np.argwhere(np.isnan(train_data))
-    remove_rows = sorted(list(set([row[0] for row in nan_loc])),
-                         reverse=True)  # so remove last first
-    for row in remove_rows:
-        del train_labels_[row]
-        train_data = np.delete(train_data, row, 0)  # index to delete, and axis
 
     train_labels = label_encoder.transform(train_labels_)  # transform strings to ints
 
