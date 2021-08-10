@@ -26,7 +26,6 @@ ONTONOTES_LABELS = [
 
 ontonotes_json = "data/ontonotes5_10percent.json"
 
-# TODO have a longer span of text for the second part of this question
 example_text = "On March 8, 2021, a group of hackers including Kottmann and calling themselves " \
        "'APT - 69420 Arson Cats' gained 'super admin' rights in the network of Verkada, a " \
        "cloud-based security camera company, using credentials they found on the public " \
