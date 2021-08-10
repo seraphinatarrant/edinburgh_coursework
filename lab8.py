@@ -44,6 +44,9 @@ def setup_argparse():
     p.add_argument('--viz_output', default='entity_viz_example.html',
                    help='Name of output file for the visualisation')
     p.add_argument('--corpus', help='name of corpus file to load in')
+    p.add_argument('--tokenization', choices=['standard', 'subword'], default='standard',
+                   help='for part 2, whether to print out the tokenized document in standard'
+                        'tokenization (whitespace), or showing subwords (BPE)')
     p.add_argument('--classifier_path', help='name for path to save classifier')
     p.add_argument('--baseline', action='store_true', help='use a simple baseline classifier')
     return p.parse_args()
@@ -63,20 +66,22 @@ def part_1(args, nlp):
 
 def part_2(args, nlp):
     # These are special characters used by the tokenizer, ignore them
-    special_chars = re.compile("Ġ|<pad>|<s>|</s>")
+    special_chars = re.compile("Ġ|<pad>|<s>|</s>|â|Ģ|ī")
     doc = nlp(example_text)
 
     print("List of Entities:")
     print(doc.ents)
 
-    print("\nStandard Tokenisation:")
-    print(" ".join([tok.text for tok in doc]))
+    if args.tokenization == 'standard':
+        print("\nStandard Tokenization:")
+        print(" ".join([tok.text for tok in doc]))
 
-    print("\nSubword Tokenisation:")
-    subword_string = " ".join([tok for tok in itertools.chain(*doc._.trf_data.wordpieces.strings)])
-    cleaned_subword_string = special_chars.sub("", subword_string).strip()
+    elif args.tokenization == 'subword':
+        print("\nSubword Tokenization:")
+        subword_string = " ".join([tok for tok in itertools.chain(*doc._.trf_data.wordpieces.strings)])
+        cleaned_subword_string = special_chars.sub("", subword_string).strip()
 
-    print(cleaned_subword_string)
+        print(cleaned_subword_string)
 
 ### This is for Part 3 ###
 class ContextualVectors(Pipe):
