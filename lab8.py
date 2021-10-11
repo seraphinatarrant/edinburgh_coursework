@@ -24,7 +24,7 @@ ONTONOTES_LABELS = [
     'CARDINAL', 'DATE', 'EVENT', 'FAC', 'GPE', 'LANGUAGE', 'LAW', 'LOC', 'MONEY', 'NORP', 'ORDINAL',
     'ORG', 'PERCENT', 'PERSON', 'PRODUCT', 'QUANTITY', 'TIME', 'WORK_OF_ART']
 
-ontonotes_json = "data/ontonotes5_10percent.json"
+ontonotes_json = "data/ontonotes5_en_16percent.json"
 
 example_text = "On March 8, 2021, a group of hackers including Kottmann and calling themselves " \
        "'APT - 69420 Arson Cats' gained 'super admin' rights in the network of Verkada, a " \
